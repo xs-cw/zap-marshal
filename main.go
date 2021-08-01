@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
-	"go/parser"
-	"go/token"
+	"io"
 	"log"
+	"os"
 	"strings"
+
+	"go/format"
 
 	"github.com/wzshiming/gotype"
 	"github.com/wzshiming/namecase"
@@ -13,193 +16,210 @@ import (
 
 func main() {
 	imp := gotype.NewImporter()
-	fSet := token.NewFileSet()
-	//解析go文件
-	f, err := parser.ParseFile(fSet, "./testdata/test_struct.go", nil, parser.ParseComments)
+	name := os.Args[1]
+	tp, err := imp.Import(".", "")
 	if err != nil {
 		log.Fatal(err)
 	}
-	tp, err := imp.ImportFile("model", f)
-	if err != nil {
-		log.Println(err)
-	}
-	res := make(map[string]logStruct, 0)
-	for i := 0; i < tp.NumChild(); i++ {
-		v := tp.Child(i)
-		if v.Kind() != gotype.Struct {
-			continue
-		}
-		res[v.Name()] = logStruct{
-			name: v.Name(),
-			fs:   getStructFields(v),
-		}
-	}
-	tmp := `func (l %s) MarshalLogObject(encoder zapcore.ObjectEncoder) error {
-%s
-return nil
-}
-`
 
-	rs := make([]string, 0, len(res))
-	for name, l := range res {
-		rs = append(rs, fmt.Sprintf(tmp, "*"+name, strings.Join(genLogMarshal("l.", l), "\n")))
+	v, ok := tp.ChildByName(name)
+	if !ok {
+		log.Fatalf("not found %q", name)
 	}
-	fmt.Println(rs)
-}
 
-type logStruct struct {
-	name string
-	fs   []field
-}
+	buf := bytes.NewBuffer(nil)
+	fmt.Fprintf(buf, `package %s
 
-type field struct {
-	name  string
-	tag   string
-	fType string
-	inner []field
-}
-
-var (
-	// []byte 单独使用ByteString
-	baseType = []string{
-		"int", "int8", "int16", "int32", "int64",
-		"uint", "uint8", "uint16", "uint32", "uint64",
-		"float32", "float64",
-		"string", "bool", "complex64", "complex128",
-	}
+import (
+	"go.uber.org/zap/zapcore"
 )
 
-func genBaseType() {
-	tmp := `func (l %s) MarshalLogArray(encoder zapcore.ArrayEncoder) error {
-%s
-return nil
-}`
+`, tp.Name())
 
-	baseTmp := `for i := range l {
-		arr.Append%s(l[i])
-	}`
-	baseRes := make([]string, 0)
-	for _, s := range baseType {
-		tp := namecase.ToPascal(s) + "Array"
-		tpDefine := fmt.Sprintf("\n type %s []%s \n", tp, s)
-		baseRes = append(baseRes, tpDefine, fmt.Sprintf(tmp, tp, fmt.Sprintf(baseTmp, namecase.ToPascal(s))))
-	}
-	fmt.Println(baseRes)
-	return
+	genDefine(buf, "l", v)
+
+	os.WriteFile(namecase.ToLowerSnake(v.Name())+"_zap_marshal_log_object.go", srcFmt(buf.Bytes()), 0644)
 }
 
-func genStructFields(prefix string, fs []field) []string {
-	res := make([]string, 0, len(fs))
-	for _, l := range fs {
-		tp := l.fType
-		val := prefix + l.name
-		switch {
-		case tp == "struct":
-			tp = "Object"
-			val = "&" + val
-		case tp == "inner":
-			obj := `_ = encoder.AddObject("%s", log.Ms(func(encoder zapcore.ObjectEncoder) error {
-    %s
-    return nil
-}))`
-			res = append(res, fmt.Sprintf(obj, namecase.ToLowerSnake(l.name), strings.Join(genStructFields(prefix+l.name+".", l.inner), "\n")))
+func srcFmt(b []byte) []byte {
+	n, err := format.Source(b)
+	if err != nil {
+		return b
+	}
+	return n
+}
+
+func genDefine(buf io.Writer, prefix string, typ gotype.Type) {
+	kind := typ.Kind()
+	switch kind {
+	case gotype.Map, gotype.Struct:
+		fmt.Fprintf(buf, `func (%s %s) MarshalLogObject(encoder zapcore.ObjectEncoder) error {
+`, prefix, typ.Name())
+		gen(buf, prefix, typ)
+	case gotype.Array, gotype.Slice:
+		fmt.Fprintf(buf, `func (%s %s) MarshalLogArray(encoder zapcore.ObjectEncoder) error {
+`, prefix, typ.Name())
+		gen(buf, prefix, typ)
+	}
+	fmt.Fprintf(buf, `return nil
+}
+`)
+}
+
+func gen(buf io.Writer, prefix string, typ gotype.Type) {
+	kind := typ.Kind()
+	switch kind {
+	case gotype.Map:
+		genMap(buf, prefix, typ)
+	case gotype.Struct:
+		genStruct(buf, prefix, typ)
+	case gotype.Array, gotype.Slice:
+		genSlice(buf, prefix, typ)
+	}
+}
+
+func genStruct(buf io.Writer, prefix string, typ gotype.Type) {
+	num := typ.NumField()
+	for i := 0; i != num; i++ {
+		field := typ.Field(i)
+		elem := field.Elem()
+		kind := elem.Kind()
+		lname := namecase.ToLowerSnake(field.Name())
+		if _, ok := elem.MethodByName("MarshalLogObject"); ok {
+			fmt.Fprintf(buf, `encoder.AddObject(%q, %s.%s)
+`, lname, prefix, field.Name())
 			continue
-		case strings.HasPrefix(tp, "[]") && tp != "[]byte":
-			tp2 := strings.TrimPrefix(tp, "[]")
-			if isBaseType(tp2) {
-				val = fmt.Sprintf("log.%sArray(%s)", namecase.ToPascal(tp2), val)
+		}
+		if _, ok := elem.MethodByName("MarshalLogArray"); ok {
+			fmt.Fprintf(buf, `encoder.AddArray(%q, %s.%s)
+`, lname, prefix, field.Name())
+			continue
+		}
+		switch kind {
+		case gotype.String:
+			if elem.Name() == strings.ToLower(kind.String()) {
+				fmt.Fprintf(buf, `encoder.AddString(%q, %s.%s)
+`, lname, prefix, field.Name())
 			} else {
-				// 结构体数组使用func
-				genObjArray(l.name)
+				fmt.Fprintf(buf, `encoder.AddString(%q, string(%s.%s))
+`, lname, prefix, field.Name())
 			}
-			tp = "Array"
-		case tp == "[]byte":
-			tp = "ByteString"
-		case tp == "time.Time":
-			tp = "Time"
-		case tp == "time.Duration":
-			tp = "Duration"
-		case isBaseType(tp):
-
-		default:
-			fmt.Println("unknown type", tp)
-			continue
-		}
-		res = append(res, fmt.Sprintf(`encoder.Add%s("%s", %s)`, namecase.ToPascal(tp), namecase.ToLowerSnake(l.name), val))
-	}
-	return res
-}
-
-func genLogMarshal(prefix string, l logStruct) []string {
-	return genStructFields(prefix, l.fs)
-}
-
-func genObjArray(name string) string {
-	return fmt.Sprintf(`log.ObjArray(func(encoder zapcore.ArrayEncoder) error {
-            for i := range l {
-                err := encoder.AppendObject(&%s)
-                if err != nil {
-                    return err
-                }
-            }
-          return nil
-		})`, name)
-}
-
-func isBaseType(t string) bool {
-	for _, s := range baseType {
-		if t == s {
-			return true
+		case gotype.Map:
+			fmt.Fprintf(buf, `encoder.AddObject(%q, zapcore.ObjectMarshalerFunc(func(encoder zapcore.ObjectEncoder) error {
+`, lname)
+			genMap(buf, prefix+"."+field.Name(), elem)
+			fmt.Fprintf(buf, `return nil
+}))
+`)
+		case gotype.Struct:
+			fmt.Fprintf(buf, `encoder.AddObject(%q, zapcore.ObjectMarshalerFunc(func(encoder zapcore.ObjectEncoder) error {
+`, lname)
+			genStruct(buf, prefix+"."+field.Name(), elem)
+			fmt.Fprintf(buf, `return nil
+}))
+`)
+		case gotype.Array, gotype.Slice:
+			fmt.Fprintf(buf, `encoder.AddArray(%q, zapcore.ArrayMarshalerFunc(func(encoder zapcore.ArrayEncoder) error {
+`, lname)
+			genSlice(buf, prefix+"."+field.Name(), elem)
+			fmt.Fprintf(buf, `return nil
+}))
+`)
 		}
 	}
-	return false
+
 }
 
-func getStructFields(v gotype.Type) []field {
-	res := make([]field, 0)
-	if v.Kind() != gotype.Struct {
-		return res
+func genSlice(buf io.Writer, prefix string, typ gotype.Type) {
+	elem := typ.Elem()
+	kind := elem.Kind()
+
+	if _, ok := elem.MethodByName("MarshalLogObject"); ok {
+		fmt.Fprintf(buf, `encoder.AppendObject(%s)
+`, prefix)
+		return
 	}
-	for j := 0; j < v.NumField(); j++ {
-		f := v.Field(j)
-		switch {
-		case f.IsAnonymous():
-			res = append(res, field{
-				name:  f.Name(),
-				tag:   f.Tag().Get("json"),
-				fType: "struct",
-			})
-		case f.Elem().Kind() == gotype.Struct:
-			if f.Elem().Name() == "" {
-				res = append(res, field{
-					name:  f.Name(),
-					tag:   f.Tag().Get("json"),
-					fType: "inner",
-					inner: getStructFields(f.Elem()),
-				})
-				continue
-			}
-			if f.Elem().String() == "time.Time" {
-				res = append(res, field{
-					name:  f.Name(),
-					tag:   f.Tag().Get("json"),
-					fType: f.Elem().String(),
-				})
-				continue
-			}
-			res = append(res, field{
-				name:  f.Name(),
-				tag:   f.Tag().Get("json"),
-				fType: "struct",
-				inner: getStructFields(f.Elem()),
-			})
-		default:
-			res = append(res, field{
-				name:  f.Name(),
-				tag:   f.Tag().Get("json"),
-				fType: f.Elem().String(),
-			})
+	if _, ok := elem.MethodByName("MarshalLogArray"); ok {
+		fmt.Fprintf(buf, `encoder.AppendArray(%s)
+`, prefix)
+		return
+	}
+
+	fmt.Fprintf(buf, `for _, v := range %s {
+`, prefix)
+	switch kind {
+	case gotype.String:
+		if elem.Name() == strings.ToLower(kind.String()) {
+			fmt.Fprintf(buf, `encoder.AppendString(v)
+`)
+		} else {
+			fmt.Fprintf(buf, `encoder.AppendString(string(v))
+`)
 		}
+	case gotype.Map:
+		fmt.Fprintf(buf, `encoder.AppendObject(zapcore.ObjectMarshalerFunc(func(encoder zapcore.ObjectEncoder) error {
+`)
+		genMap(buf, "v", elem)
+		fmt.Fprintf(buf, `return nil
+}))
+`)
+	case gotype.Struct:
+		fmt.Fprintf(buf, `encoder.AppendObject(zapcore.ObjectMarshalerFunc(func(encoder zapcore.ObjectEncoder) error {
+`)
+		genStruct(buf, "v", elem)
+		fmt.Fprintf(buf, `return nil
+}))
+`)
+	case gotype.Array, gotype.Slice:
+		fmt.Fprintf(buf, `encoder.AppendArray(zapcore.ArrayMarshalerFunc(func(encoder zapcore.ArrayEncoder) error {
+`)
+		genSlice(buf, "v", elem)
+		fmt.Fprintf(buf, `return nil
+}))
+`)
 	}
-	return res
+
+	fmt.Fprintf(buf, `}
+`)
+}
+
+func genMap(buf io.Writer, prefix string, typ gotype.Type) {
+	key := typ.Key()
+	elem := typ.Elem()
+	kind := elem.Kind()
+
+	fmt.Fprintf(buf, `for k, v := range %s {
+`, prefix)
+
+	k := "k"
+	if key.Name() != strings.ToLower(key.Kind().String()) {
+		k = "sk"
+	}
+	switch kind {
+	case gotype.String:
+		if elem.Name() == strings.ToLower(kind.String()) {
+			fmt.Fprintf(buf, `encoder.AddString(%s, v)
+`, k)
+		} else {
+			fmt.Fprintf(buf, `encoder.AddString(%s, string(v))
+`, k)
+		}
+	case gotype.Struct:
+		fmt.Fprintf(buf, `encoder.AddObject(%s, zapcore.ObjectMarshalerFunc(func(encoder zapcore.ObjectEncoder) error {
+`, k)
+		genStruct(buf, "v", elem)
+		fmt.Fprintf(buf, `return nil
+}))
+`)
+	case gotype.Array, gotype.Slice:
+		fmt.Fprintf(buf, `encoder.AddArray(%s, zapcore.ArrayMarshalerFunc(func(encoder zapcore.ArrayEncoder) error {
+`, k)
+		genSlice(buf, "v", elem)
+		fmt.Fprintf(buf, `return nil
+}))
+`)
+	}
+
+	fmt.Fprintf(buf, `}
+`)
 }
