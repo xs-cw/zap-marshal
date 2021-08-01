@@ -1,5 +1,7 @@
 package src
 
+import "time"
+
 //go:generate go run github.com/xs-cw/zap-marshal Request
 type Request struct {
 	Param struct {
@@ -13,6 +15,7 @@ type Request struct {
 	Filter struct {
 		Type string
 	}
+	Time time.Time
 	Map  map[string]string
 	Name string
 	UID  string

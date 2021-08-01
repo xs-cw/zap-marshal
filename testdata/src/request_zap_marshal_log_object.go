@@ -38,6 +38,10 @@ func (l Request) MarshalLogObject(encoder zapcore.ObjectEncoder) error {
 		encoder.AddString("type", l.Filter.Type)
 		return nil
 	}))
+	encoder.AddTime("time", l.Time)
+	encoder.AddObject("time", zapcore.ObjectMarshalerFunc(func(encoder zapcore.ObjectEncoder) error {
+		return nil
+	}))
 	encoder.AddObject("map", zapcore.ObjectMarshalerFunc(func(encoder zapcore.ObjectEncoder) error {
 		for k, v := range l.Map {
 			encoder.AddString(k, v)

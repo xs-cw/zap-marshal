@@ -14,8 +14,23 @@ import (
 	"github.com/wzshiming/namecase"
 )
 
+var imp = gotype.NewImporter()
+
+var (
+	objectEncoder gotype.Type
+)
+
 func main() {
-	imp := gotype.NewImporter()
+	zapcore, err := imp.Import("go.uber.org/zap/zapcore", "")
+	if err != nil {
+		log.Fatal(err)
+	}
+	e, ok := zapcore.ChildByName("ObjectMarshaler")
+	if !ok {
+		log.Fatalf("not found ObjectEncoder")
+	}
+	objectEncoder = e
+
 	name := os.Args[1]
 	tp, err := imp.Import(".", "")
 	if err != nil {
@@ -85,16 +100,26 @@ func genStruct(buf io.Writer, prefix string, typ gotype.Type) {
 		elem := field.Elem()
 		kind := elem.Kind()
 		lname := namecase.ToLowerSnake(field.Name())
-		if _, ok := elem.MethodByName("MarshalLogObject"); ok {
+
+		if gotype.Implements(elem, objectEncoder) {
 			fmt.Fprintf(buf, `encoder.AddObject(%q, %s.%s)
 `, lname, prefix, field.Name())
 			continue
 		}
+
 		if _, ok := elem.MethodByName("MarshalLogArray"); ok {
 			fmt.Fprintf(buf, `encoder.AddArray(%q, %s.%s)
 `, lname, prefix, field.Name())
 			continue
 		}
+		if elem.PkgPath() == "time" {
+			switch elem.Name() {
+			case "Time":
+				fmt.Fprintf(buf, `encoder.AddTime(%q, %s.%s)
+`, lname, prefix, field.Name())
+			}
+		}
+
 		switch kind {
 		case gotype.String:
 			if elem.Name() == strings.ToLower(kind.String()) {
