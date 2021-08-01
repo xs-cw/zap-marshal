@@ -7,9 +7,8 @@ import (
 	"log"
 	"strings"
 
-	"github.com/wzshiming/namecase"
-
 	"github.com/wzshiming/gotype"
+	"github.com/wzshiming/namecase"
 )
 
 func main() {
