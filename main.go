@@ -3,12 +3,11 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"go/format"
 	"io"
 	"log"
 	"os"
 	"strings"
-
-	"go/format"
 
 	"github.com/wzshiming/gotype"
 	"github.com/wzshiming/namecase"
@@ -42,6 +41,8 @@ var baseTypes = []gotype.Kind{
 }
 var (
 	objectEncoder gotype.Type
+	arrayEncoder  gotype.Type
+	pkgs          = []string{"go.uber.org/zap/zapcore"}
 )
 
 func main() {
@@ -53,7 +54,12 @@ func main() {
 	if !ok {
 		log.Fatalf("not found ObjectEncoder")
 	}
+	am, ok := zapcore.ChildByName("ArrayMarshaler")
+	if !ok {
+		log.Fatalf("not found ObjectEncoder")
+	}
 	objectEncoder = e
+	arrayEncoder = am
 
 	name := os.Args[1]
 	tp, err := imp.Import(".", "")
@@ -67,13 +73,19 @@ func main() {
 	}
 
 	buf := bytes.NewBuffer(nil)
-	fmt.Fprintf(buf, "package %s \n import ( \n \"go.uber.org/zap/zapcore\" \n)\n", tp.Name())
 
 	genDefine(buf, "l", v)
 
-	os.WriteFile(namecase.ToLowerSnake(v.Name())+"_zap_marshal_log_object.go", srcFmt(buf.Bytes()), 0644)
+	for i := range pkgs {
+		pkgs[i] = fmt.Sprintf("%q", pkgs[i])
+	}
+	imps := fmt.Sprintf("package %s \n import ( \n  %s \n)\n", tp.Name(), strings.Join(pkgs, "\n"))
+	res := append([]byte(imps), buf.Bytes()...)
+	os.WriteFile(namecase.ToLowerSnake(v.Name())+"_zap_marshal_log_object.go", srcFmt(res), 0644)
 }
-
+func addPkg(s string) {
+	pkgs = append(pkgs, s)
+}
 func srcFmt(b []byte) []byte {
 	n, err := format.Source(b)
 	if err != nil {
@@ -120,7 +132,7 @@ func genStruct(buf io.Writer, prefix string, typ gotype.Type) {
 			continue
 		}
 
-		if _, ok := elem.MethodByName("MarshalLogArray"); ok {
+		if gotype.Implements(elem, arrayEncoder) {
 			fmt.Fprintf(buf, "encoder.AddArray(%q, %s.%s)\n", logName, prefix, field.Name())
 			continue
 		}
@@ -128,6 +140,7 @@ func genStruct(buf io.Writer, prefix string, typ gotype.Type) {
 			switch elem.Name() {
 			case "Time":
 				fmt.Fprintf(buf, "encoder.AddTime(%q, %s.%s)\n", logName, prefix, field.Name())
+				addPkg("time")
 				continue
 			}
 		}
@@ -164,11 +177,11 @@ func genSlice(buf io.Writer, prefix string, typ gotype.Type) {
 	elem := typ.Elem()
 	kind := elem.Kind()
 
-	if _, ok := elem.MethodByName("MarshalLogObject"); ok {
+	if gotype.Implements(elem, objectEncoder) {
 		fmt.Fprintf(buf, "encoder.AppendObject(%s)\n", prefix)
 		return
 	}
-	if _, ok := elem.MethodByName("MarshalLogArray"); ok {
+	if gotype.Implements(elem, arrayEncoder) {
 		fmt.Fprintf(buf, "encoder.AppendArray(%s)\n", prefix)
 		return
 	}
@@ -218,9 +231,13 @@ func genMap(buf io.Writer, prefix string, typ gotype.Type) {
 			log.Println("unexpect type", kind.String())
 		}
 	case gotype.Struct:
-		fmt.Fprintf(buf, "encoder.AddObject(%s, zapcore.ObjectMarshalerFunc(func(encoder zapcore.ObjectEncoder) error {\n", k)
-		genStruct(buf, "v", elem)
-		fmt.Fprintf(buf, "\n return nil \n}))\n")
+		if gotype.Implements(elem, objectEncoder) {
+			fmt.Fprintf(buf, "encoder.AppendObject(%s)\n", prefix)
+		} else {
+			fmt.Fprintf(buf, "encoder.AddObject(%s, zapcore.ObjectMarshalerFunc(func(encoder zapcore.ObjectEncoder) error {\n", k)
+			genStruct(buf, "v", elem)
+			fmt.Fprintf(buf, "\n return nil \n}))\n")
+		}
 	case gotype.Array, gotype.Slice:
 		if isBytesType(elem) {
 			genObjectBytesType(buf, k, "v", elem)
@@ -307,20 +324,25 @@ func genSliceBytesType(buf io.Writer, val string, tp gotype.Type) {
 }
 
 func keyTypeConvert(key string, kind gotype.Kind) string {
+	res := ""
 	switch kind {
 	case gotype.String, gotype.Rune:
-		return fmt.Sprintf("string(%s)", key)
+		res = fmt.Sprintf("string(%s)", key)
 	case gotype.Int, gotype.Int8, gotype.Int16, gotype.Int32, gotype.Int64:
-		return fmt.Sprintf("strconv.FormatInt(int64(%s),10)", key)
+		res = fmt.Sprintf("strconv.FormatInt(int64(%s),10)", key)
 	case gotype.Uint, gotype.Uint8, gotype.Uint16, gotype.Uint32, gotype.Uint64:
-		return fmt.Sprintf("strconv.FormatUint(uint64(%s))", key)
+		res = fmt.Sprintf("strconv.FormatUint(uint64(%s))", key)
 	case gotype.Float32, gotype.Float64:
-		return fmt.Sprintf("strconv.FormatFloat(float64(%s),'f',-1,64)", key)
+		res = fmt.Sprintf("strconv.FormatFloat(float64(%s),'f',-1,64)", key)
 	case gotype.Complex64, gotype.Complex128:
-		return fmt.Sprintf("strconv.FormatComplex(complex128(%s),'f',-1,64)", key)
+		res = fmt.Sprintf("strconv.FormatComplex(complex128(%s),'f',-1,64)", key)
 	case gotype.Bool:
-		return fmt.Sprintf("strconv.FormatBool(%s)", key)
+		res = fmt.Sprintf("strconv.FormatBool(%s)", key)
 	default:
-		return fmt.Sprintf("fmt.Sprint(%s)", key)
+		res = fmt.Sprintf("fmt.Sprint(%s)", key)
 	}
+	if i := strings.Index(res, "."); i > 0 {
+		addPkg(res[:i])
+	}
+	return res
 }

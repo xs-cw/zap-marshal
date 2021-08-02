@@ -6,6 +6,7 @@ import (
 
 func (l RespResult) MarshalLogObject(encoder zapcore.ObjectEncoder) error {
 	encoder.AddString("type", l.Type)
+	encoder.AddInt("num", l.Num)
 	encoder.AddObject("list", zapcore.ObjectMarshalerFunc(func(encoder zapcore.ObjectEncoder) error {
 		for k, v := range l.List {
 			encoder.AddArray(k, zapcore.ArrayMarshalerFunc(func(encoder zapcore.ArrayEncoder) error {
