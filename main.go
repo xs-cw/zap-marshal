@@ -3,14 +3,14 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"github.com/wzshiming/gotype"
+	"github.com/wzshiming/namecase"
 	"go/format"
 	"io"
 	"log"
 	"os"
 	"strings"
-
-	"github.com/wzshiming/gotype"
-	"github.com/wzshiming/namecase"
+	"time"
 )
 
 func init() {
@@ -42,10 +42,14 @@ var baseTypes = []gotype.Kind{
 var (
 	objectEncoder gotype.Type
 	arrayEncoder  gotype.Type
-	pkgs          = []string{"go.uber.org/zap/zapcore"}
+	pkgs          []string
 )
 
 func main() {
+	now := time.Now()
+	defer func() {
+		log.Println(time.Since(now))
+	}()
 	zapcore, err := imp.Import("go.uber.org/zap/zapcore", "")
 	if err != nil {
 		log.Fatal(err)
@@ -61,7 +65,14 @@ func main() {
 	objectEncoder = e
 	arrayEncoder = am
 
-	name := os.Args[1]
+	names := os.Args[1:]
+	for _, s := range names {
+		genType(s)
+	}
+}
+
+func genType(name string) {
+	pkgs = []string{"go.uber.org/zap/zapcore"}
 	tp, err := imp.Import(".", "")
 	if err != nil {
 		log.Fatal(err)
@@ -83,9 +94,11 @@ func main() {
 	res := append([]byte(imps), buf.Bytes()...)
 	os.WriteFile(namecase.ToLowerSnake(v.Name())+"_zap_marshal_log_object.go", srcFmt(res), 0644)
 }
+
 func addPkg(s string) {
 	pkgs = append(pkgs, s)
 }
+
 func srcFmt(b []byte) []byte {
 	n, err := format.Source(b)
 	if err != nil {
