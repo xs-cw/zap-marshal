@@ -12,6 +12,8 @@ github.com/stretchr/testify v1.4.0/go.mod h1:j7eGeouHqKxXV5pUuKE4zz7dFj8WfuZ+81P
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/wzshiming/gotype v0.7.1 h1:HcFzxoBQxwslmsC7JguIuC6EvbeuKDz8uL7SQ287kgc=
 github.com/wzshiming/gotype v0.7.1/go.mod h1:7YULvVsDObRVX2U6iUcF5hixYvHFavLsTSIW26c5GLM=
+github.com/wzshiming/gotype v0.7.2 h1:yWJE6uYvTz9x0r1GCQ6UFy3p0AooP2oExcLyWhrfyGg=
+github.com/wzshiming/gotype v0.7.2/go.mod h1:7YULvVsDObRVX2U6iUcF5hixYvHFavLsTSIW26c5GLM=
 github.com/wzshiming/namecase v0.2.0 h1:zRWDTVN8Yfzz9YfpOuM/TpYza/HRO9SrWAR6l9mMpKQ=
 github.com/wzshiming/namecase v0.2.0/go.mod h1:FJT9Q8a289dtinO3AJUDKqRP9UQzq9UxpWDevdDVvYA=
 go.uber.org/atomic v1.7.0 h1:ADUqmZGgLDDfbSL9ZmPxKTybcoEYHgpYfELNoN+7hsw=
