@@ -15,10 +15,13 @@ type Request struct {
 	Filter struct {
 		Type string
 	}
-	Time time.Time
-	Map  map[string]string
-	Name string
-	UID  string
+	Time  time.Time
+	Map   map[string]string
+	Map2  map[string][]string
+	Name  string
+	Flag  rune
+	Flags []rune
+	UID   string
 }
 
 //go:generate go run github.com/xs-cw/zap-marshal Response

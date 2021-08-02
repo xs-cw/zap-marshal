@@ -7,6 +7,7 @@ import (
 func (l Request) MarshalLogObject(encoder zapcore.ObjectEncoder) error {
 	encoder.AddObject("param", zapcore.ObjectMarshalerFunc(func(encoder zapcore.ObjectEncoder) error {
 		encoder.AddString("type", l.Param.Type)
+		encoder.AddInt("num", l.Param.Num)
 		encoder.AddArray("index", zapcore.ArrayMarshalerFunc(func(encoder zapcore.ArrayEncoder) error {
 			for _, v := range l.Param.Index {
 				encoder.AppendString(v)
@@ -39,16 +40,31 @@ func (l Request) MarshalLogObject(encoder zapcore.ObjectEncoder) error {
 		return nil
 	}))
 	encoder.AddTime("time", l.Time)
-	encoder.AddObject("time", zapcore.ObjectMarshalerFunc(func(encoder zapcore.ObjectEncoder) error {
-		return nil
-	}))
 	encoder.AddObject("map", zapcore.ObjectMarshalerFunc(func(encoder zapcore.ObjectEncoder) error {
 		for k, v := range l.Map {
 			encoder.AddString(k, v)
 		}
 		return nil
 	}))
+	encoder.AddObject("map_2", zapcore.ObjectMarshalerFunc(func(encoder zapcore.ObjectEncoder) error {
+		for k, v := range l.Map2 {
+			encoder.AddArray(k, zapcore.ArrayMarshalerFunc(func(encoder zapcore.ArrayEncoder) error {
+				for _, v := range v {
+					encoder.AppendString(v)
+				}
+				return nil
+			}))
+		}
+		return nil
+	}))
 	encoder.AddString("name", l.Name)
+	encoder.AddString("flag", string(l.Flag))
+	encoder.AddArray("flags", zapcore.ArrayMarshalerFunc(func(encoder zapcore.ArrayEncoder) error {
+		for _, v := range l.Flags {
+			encoder.AppendString(string(v))
+		}
+		return nil
+	}))
 	encoder.AddString("uid", l.UID)
 	return nil
 }

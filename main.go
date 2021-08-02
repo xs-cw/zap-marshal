@@ -14,6 +14,10 @@ import (
 	"github.com/wzshiming/namecase"
 )
 
+func init() {
+	log.SetFlags(log.Lshortfile)
+}
+
 var imp = gotype.NewImporter()
 var baseTypes = []gotype.Kind{
 	gotype.Bool,
@@ -131,7 +135,7 @@ func genStruct(buf io.Writer, prefix string, typ gotype.Type) {
 		switch kind {
 		default:
 			if isBaseType(kind) {
-				genObjectBaseType(buf, logName, prefix+"."+field.Name(), elem)
+				genStructBaseType(buf, logName, prefix+"."+field.Name(), elem)
 			} else {
 				log.Println("unexpect type", kind.String())
 			}
@@ -204,12 +208,12 @@ func genMap(buf io.Writer, prefix string, typ gotype.Type) {
 	fmt.Fprintf(buf, "for k, v := range %s {\n", prefix)
 	k := "k"
 	if key.Name() != strings.ToLower(key.Kind().String()) {
-		k = keyTypeConvert("k", key.Kind())
+		k = keyTypeConvert(k, key.Kind())
 	}
 	switch kind {
 	default:
 		if isBaseType(kind) {
-			genObjectBaseType(buf, k, "v", elem)
+			genMapBaseType(buf, k, "v", elem)
 		} else {
 			log.Println("unexpect type", kind.String())
 		}
@@ -252,18 +256,38 @@ func isBaseType(p gotype.Kind) bool {
 	return false
 }
 
-func genObjectBaseType(buf io.Writer, logName string, val string, tp gotype.Type) {
+func genStructBaseType(buf io.Writer, logName string, val string, tp gotype.Type) {
 	kind := tp.Kind()
 	tpName := tp.Name()
+	if kind == gotype.Rune {
+		kind = gotype.String
+	}
 	if tpName == strings.ToLower(kind.String()) {
 		fmt.Fprintf(buf, "encoder.Add%s(%q, %s)\n", namecase.ToPascal(tpName), logName, val)
 	} else {
 		fmt.Fprintf(buf, "encoder.Add%s(%q, %s(%s))\n", namecase.ToPascal(kind.String()), logName, strings.ToLower(kind.String()), val)
 	}
 }
+
+func genMapBaseType(buf io.Writer, logName string, val string, tp gotype.Type) {
+	kind := tp.Kind()
+	tpName := tp.Name()
+	if kind == gotype.Rune {
+		kind = gotype.String
+	}
+	if tpName == strings.ToLower(kind.String()) {
+		fmt.Fprintf(buf, "encoder.Add%s(%s, %s)\n", namecase.ToPascal(tpName), logName, val)
+	} else {
+		fmt.Fprintf(buf, "encoder.Add%s(%s, %s(%s))\n", namecase.ToPascal(kind.String()), logName, strings.ToLower(kind.String()), val)
+	}
+}
+
 func genSliceBaseType(buf io.Writer, val string, tp gotype.Type) {
 	kind := tp.Kind()
 	tpName := tp.Name()
+	if kind == gotype.Rune {
+		kind = gotype.String
+	}
 	if tpName == strings.ToLower(kind.String()) {
 		fmt.Fprintf(buf, "encoder.Append%s(%s)\n", namecase.ToPascal(tpName), val)
 	} else {
@@ -284,7 +308,7 @@ func genSliceBytesType(buf io.Writer, val string, tp gotype.Type) {
 
 func keyTypeConvert(key string, kind gotype.Kind) string {
 	switch kind {
-	case gotype.String:
+	case gotype.String, gotype.Rune:
 		return fmt.Sprintf("string(%s)", key)
 	case gotype.Int, gotype.Int8, gotype.Int16, gotype.Int32, gotype.Int64:
 		return fmt.Sprintf("strconv.FormatInt(int64(%s),10)", key)
